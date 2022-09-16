@@ -29,7 +29,7 @@ from typing import Optional, Sequence, Union
 
 import numpy as np
 import yaml
-from pyproj import Geod, Proj, transform
+from pyproj import Geod, Proj, transform, Transformer
 from pyproj.aoi import AreaOfUse
 
 from pyresample import CHUNK_SIZE
@@ -1851,6 +1851,51 @@ class AreaDefinition(_ProjectionDefinition):
         from pyresample.utils.cartopy import Projection
         crs = Projection(self.crs, bounds=bounds)
         return crs
+
+    def to_crs(self, crs=None, epsg=None):
+        """Return a new reprojected AreaDefinition.
+
+        Args:
+            crs (:obj:`pyproj.CRS`, optional):
+                Optional if `epsg` is specified. Can be anything accepted by :meth:`pyproj.CRS.from_user_input`
+                such as an authority string (e.g. "EPSG:4326") or a WKT string.
+            epsg (int, optional):
+                Optional if `crs` is specified. EPSG code specifying output projection.
+
+        Returns:
+            :obj:`~pyresample.geometry.AreaDefinition`:
+                Resampled AreaDefinition
+        """
+        if crs is not None:
+            crs = CRS.from_user_input(crs)
+        elif epsg is not None:
+            crs = CRS.from_epsg(epsg)
+        else:
+            raise ValueError("Must pass either crs or epsg.")
+
+        # skip if the input CRS and output CRS are the exact same
+        if self.crs.is_exact_same(crs):
+            return self
+
+        transformer = Transformer.from_crs(self.crs, crs, always_xy=True)
+
+        xmax, ymax, xmin, ymin = self.area_extent
+        # if borders of geo full disk are in domain transformation leads to inf!!!!
+        xx, yy = transformer.transform([xmin, xmax], [ymin, ymax])
+        target_extent = [xx[0], yy[0], xx[1], yy[1]]
+        print(target_extent)
+
+        area_res_x = (xmax - xmin) / self.x_size
+        area_res_y = (ymax - ymin) / self.y_size
+        print(area_res_x, area_res_y)
+
+        # if for example target crs is 4326 (WGS84) which has units degree special handling of area_res_* is needed!!
+        # use crs.is_geographic or not crs.is_projected
+        target_size_x = abs(int((target_extent[2] - target_extent[0]) / area_res_x))
+        target_size_y = abs(int((target_extent[3] - target_extent[1]) / area_res_y))
+        print(target_size_x, target_size_y)
+
+        return AreaDefinition(self.area_id, self.description, None, crs, target_size_x, target_size_y, target_extent)
 
     def _cartopy_proj_params(self):
         if self.crs.to_epsg() is not None:
